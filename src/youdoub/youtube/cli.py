@@ -49,7 +49,7 @@ def asr(
     workdir: Path = typer.Option(Path("./work"), "--workdir", "-w", help="工作目录"),
     lang: str = typer.Option("en", "--lang", help="ASR 语言"),
     input_file: str = typer.Option(None, "--input", "-i", help="输入音频/视频文件路径（默认为 work/video.mp4）"),
-    model: str = typer.Option("medium", "--model", "-m", help="Whisper 模型大小 (tiny/base/small/medium/large-v2/large-v3)"),
+    model: str = typer.Option("medium", "--model", "-m", help="Whisper 模型: tiny/base/small/medium/large-v1/large-v2/large-v3/large/distil-*系列/turbo (默认: medium)"),
     model_dir: str = typer.Option(None, "--model-dir", help="模型下载目录（默认为 ./models）"),
     force: bool = typer.Option(False, "--force", help="强制重新生成，即使文件已存在"),
 ):
