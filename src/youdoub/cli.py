@@ -8,7 +8,11 @@ import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from . import __version__
+try:
+    from . import __version__
+except ImportError:
+    # Allow running as standalone script
+    __version__ = "0.1.0"
 
 app = typer.Typer(
     name="youdoub",

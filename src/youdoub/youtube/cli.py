@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from typing import List
 
 import typer
-from rich.console import Console
+import yt_dlp
 from faster_whisper import WhisperModel
+from rich.console import Console
 
 from ..paths import ensure_workdir
-from .downloader import download_youtube_video
-import json
-from typing import List
 from ..subtitles.translate import translate_srt_file
+from .downloader import download_youtube_video
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -19,16 +20,41 @@ console = Console()
 @app.command("dl")
 def dl(
     url: str = typer.Argument(..., help="YouTube 视频 URL"),
-    workdir: Path = typer.Option(Path("./work"), "--workdir", "-w", help="工作目录"),
+    workdir: Path = typer.Option(Path(os.getenv("YOUDOUB_WORKDIR", "./work")), "--workdir", "-w", help="工作目录"),
+    video_id: str = typer.Option(None, "--video-id", "-v", help="视频 ID（默认从 URL 自动提取）"),
     force: bool = typer.Option(False, "--force", help="强制重新下载，即使文件已存在"),
     download_subs: bool = typer.Option(True, "--subs/--no-subs", help="同时下载字幕"),
     sub_lang: str = typer.Option("en", "--sub-lang", help="字幕语言（默认：en）"),
     keep_streams: bool = typer.Option(False, "--keep-streams", help="保留单独的音频和视频流文件"),
 ):
     """下载视频、元数据以及可选的字幕到工作目录。"""
-    wp = ensure_workdir(workdir)
+    # Clean URL to handle escaped characters from browser copy-paste
+    cleaned_url = url.replace('\\', '')
+
+    # Extract video_id if not provided
+    if video_id is None:
+        console.print("正在提取视频 ID...")
+        try:
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                info = ydl.extract_info(cleaned_url, download=False)
+                video_id = info.get('id')
+                if not video_id:
+                    console.print("[red]错误[/red] 无法从 URL 提取视频 ID，请手动指定 --video-id")
+                    raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"[red]错误[/red] 提取视频 ID 失败: {e}")
+            console.print("请手动指定 --video-id 参数")
+            raise typer.Exit(1)
+
+    # Compute target workspace path
+    target_root = workdir / video_id
+    wp = ensure_workdir(target_root)
+
+    console.print(f"视频 ID: {video_id}")
+    console.print(f"工作目录: {target_root}")
+
     download_youtube_video(
-        url=url,
+        url=cleaned_url,
         video_out=wp.video,
         meta_out=wp.meta_json,
         force=force,
@@ -46,7 +72,8 @@ def dl(
 
 @app.command("asr")
 def asr(
-    workdir: Path = typer.Option(Path("./work"), "--workdir", "-w", help="工作目录"),
+    video_id: str = typer.Option(..., "--video-id", "-v", help="视频 ID"),
+    workdir: Path = typer.Option(Path(os.getenv("YOUDOUB_WORKDIR", "./work")), "--workdir", "-w", help="工作目录"),
     lang: str = typer.Option("en", "--lang", help="ASR 语言"),
     input_file: str = typer.Option(None, "--input", "-i", help="输入音频/视频文件路径（默认为 work/video.mp4）"),
     model: str = typer.Option("medium", "--model", "-m", help="Whisper 模型: tiny/base/small/medium/large-v1/large-v2/large-v3/large/distil-*系列/turbo (默认: medium)"),
@@ -54,12 +81,17 @@ def asr(
     force: bool = typer.Option(False, "--force", help="强制重新生成，即使文件已存在"),
 ):
     """ASR 语音识别（使用 faster-whisper）。"""
-    wp = ensure_workdir(workdir)
+    # Compute target workspace path
+    target_root = workdir / video_id
+    wp = ensure_workdir(target_root)
+
+    console.print(f"视频 ID: {video_id}")
+    console.print(f"工作目录: {target_root}")
 
     # 确定输入文件
     if input_file is None:
         # 优先使用音频流文件（如果存在），其次使用视频文件
-        audio_files = list(workdir.glob("*.webm")) + list(workdir.glob("*.m4a"))
+        audio_files = list(wp.root.glob("*.webm")) + list(wp.root.glob("*.m4a"))
         if audio_files:
             input_file = str(audio_files[0])  # 使用第一个音频文件
         elif wp.video.exists():
@@ -100,6 +132,15 @@ def asr(
     if model_dir:
         os.environ["HF_HOME"] = model_dir
         os.environ["HUGGINGFACE_HUB_CACHE"] = model_dir
+
+    # 确保显示下载进度条
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "False"
+    # 使用标准下载器以确保进度条显示
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "False"
+
+    console.print(f"正在加载模型: {model}")
+    if not force:
+        console.print("如果模型不存在，将显示下载进度...")
 
     try:
         # 初始化 Whisper 模型
@@ -277,18 +318,28 @@ def _write_srt_entries(path: Path, entries: List[dict]) -> None:
 # 翻译字幕命令：使用新的翻译子模块
 @app.command("translate-subs")
 def translate_subs(
-    workdir: Path = typer.Option(Path("./work"), "--workdir", "-w", help="工作目录"),
+    video_id: str = typer.Option(..., "--video-id", "-v", help="视频 ID"),
+    workdir: Path = typer.Option(Path(os.getenv("YOUDOUB_WORKDIR", "./work")), "--workdir", "-w", help="工作目录"),
     source: str = typer.Option(None, "--source", "-i", help="输入 SRT 文件（默认 work/subs/asr.en.srt）"),
     lang: str = typer.Option(..., "--lang", "-l", help="目标语言代码，例如 zh-CN"),
     backend: str = typer.Option("deepseek", "--backend", help="翻译后端: deepseek|ollama|openai"),
+    model: str = typer.Option("deepseek-chat", "--model", help="DeepSeek 模型名称: deepseek-chat|deepseek-reasoner"),
     api_key: str = typer.Option(None, "--api-key", help="后端 API key（可用环境变量代替）"),
     batch_size: int = typer.Option(30000, "--batch-size", help="每批最大字符数（DeepSeek API 推荐 30000）"),
     force: bool = typer.Option(False, "--force", help="强制覆盖已存在的输出文件"),
     out: str = typer.Option(None, "--out", help="输出 SRT 路径，默认 work/subs/asr.<lang>.srt"),
     no_verify_ssl: bool = typer.Option(False, "--no-verify-ssl", help="禁用SSL证书验证（用于解决SSL连接问题）"),
+    whole_file: bool = typer.Option(False, "--whole-file", help="一次性提交整个字幕文件进行翻译（获得更好上下文理解）"),
+    merge_timelines: bool = typer.Option(False, "--merge-timelines", help="合并过短的时间轴片段"),
+    min_duration: int = typer.Option(1000, "--min-duration", help="最短字幕持续时间（毫秒），用于时间轴合并，默认 1000ms"),
 ):
     # Translate SRT subtitles in batches and write translated SRT.
-    wp = ensure_workdir(workdir)
+    # Compute target workspace path
+    target_root = workdir / video_id
+    wp = ensure_workdir(target_root)
+
+    console.print(f"视频 ID: {video_id}")
+    console.print(f"工作目录: {target_root}")
 
     # determine input file
     if source is None:
@@ -309,9 +360,25 @@ def translate_subs(
         return
 
     console.print(f"开始翻译字幕: {input_path} -> {out_path}")
-    console.print(f"目标语言: {lang}, 后端: {backend}, batch_size_chars: {batch_size}")
+    console.print(f"目标语言: {lang}, 后端: {backend}, 模型: {model}, batch_size_chars: {batch_size}")
+    if whole_file:
+        console.print("[blue]使用模式[/blue]: 一次性提交整个字幕文件")
+    if merge_timelines:
+        console.print(f"[blue]时间轴合并[/blue]: 启用，最短持续时间 {min_duration}ms")
     try:
-        translate_srt_file(input_path=input_path, output_path=out_path, target_lang=lang, backend=backend, api_key=api_key, batch_size_chars=batch_size, verify_ssl=not no_verify_ssl)
+        translate_srt_file(
+            input_path=input_path,
+            output_path=out_path,
+            target_lang=lang,
+            backend=backend,
+            api_key=api_key,
+            model=model,
+            batch_size_chars=batch_size,
+            verify_ssl=not no_verify_ssl,
+            whole_file=whole_file,
+            merge_timelines=merge_timelines,
+            min_duration_ms=min_duration
+        )
     except Exception as e:
         console.print(f"[red]错误[/red] 翻译失败: {e}")
         raise typer.Exit(1)

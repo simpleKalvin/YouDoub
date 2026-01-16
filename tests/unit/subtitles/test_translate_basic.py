@@ -3,7 +3,7 @@
 
 import sys
 import os
-sys.path.insert(0, 'src')
+# sys.path is configured in conftest.py
 
 def test_translate_imports():
     """Test that all translate modules can be imported"""

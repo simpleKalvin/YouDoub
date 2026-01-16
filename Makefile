@@ -1,7 +1,7 @@
 # YouDoub Makefile
 # 用于在 Ubuntu 上安装 uv 并管理项目环境
 
-.PHONY: help install-uv init install run clean dev-install test
+.PHONY: help install-uv init install run clean dev-install test test-bili install-biliup
 
 # 默认目标
 help: ## 显示帮助信息
@@ -35,6 +35,7 @@ install: ## 安装项目依赖
 		exit 1; \
 	fi
 	uv pip install -e .
+	@echo "提示: 如需 BiliBili 上传功能，请运行 'make install-biliup'"
 	@echo "依赖安装完成"
 
 dev-install: ## 安装开发依赖 (包括测试工具等)
@@ -44,6 +45,16 @@ dev-install: ## 安装开发依赖 (包括测试工具等)
 		exit 1; \
 	fi
 	uv pip install -e ".[dev]"
+
+install-biliup: ## 安装 biliup (用于 BiliBili 上传)
+	@echo "安装 biliup..."
+	@if [ ! -d ".venv" ]; then \
+		echo "错误: 虚拟环境不存在，请先运行 'make init'"; \
+		exit 1; \
+	fi
+	uv pip install biliup
+	@echo "biliup 安装完成！"
+	@echo "接下来配置 BiliBili 账号: biliup login"
 	@echo "开发依赖安装完成"
 
 run: ## 运行 YouDoub CLI
@@ -65,6 +76,14 @@ test: ## 运行测试 (如果有的话)
 	else \
 		echo "未找到测试文件"; \
 	fi
+
+test-bili: ## 测试 BiliBili 投稿功能
+	@echo "测试 BiliBili 投稿功能..."
+	@if [ ! -d ".venv" ]; then \
+		echo "错误: 虚拟环境不存在"; \
+		exit 1; \
+	fi
+	uv run python test_bili_submit.py
 
 clean: ## 清理缓存文件和临时文件
 	@echo "清理缓存文件..."
